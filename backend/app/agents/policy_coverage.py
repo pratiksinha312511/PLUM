@@ -11,6 +11,7 @@ Checks (in order, but all run so the trace shows everything):
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from app.agents.base import Agent, PipelineContext
@@ -66,10 +67,11 @@ class PolicyCoverageAgent(Agent):
             ctx.trace.add(self.name, "failed", f"Category {sub.claim_category.value} is not covered.")
             return
 
-        # 1. Exclusions by diagnosis text
+        # 1. Exclusions by diagnosis text (word-boundary match to avoid
+        #    false positives like 'hernia' matching 'lumbar disc herniation').
         diag_blob = " ".join(ctx.detected_diagnoses + self._collect_treatment_text(ctx)).lower()
         for kw, label in _EXCLUSION_KEYWORDS.items():
-            if kw in diag_blob:
+            if re.search(rf"\b{re.escape(kw)}\b", diag_blob):
                 ctx.rejection_reasons.append(RejectionReason.EXCLUDED_CONDITION)
                 ctx.trace.add(
                     self.name,
@@ -87,7 +89,7 @@ class PolicyCoverageAgent(Agent):
             days_since_join = (tdate - join).days
             wp = policy.waiting_periods
             for kw, key in _DIAG_KEYWORDS.items():
-                if kw in diag_blob:
+                if re.search(rf"\b{re.escape(kw)}\b", diag_blob):
                     required_days = wp.get("specific_conditions", {}).get(key)
                     if required_days and days_since_join < required_days:
                         eligible_from = join.fromordinal(join.toordinal() + required_days)

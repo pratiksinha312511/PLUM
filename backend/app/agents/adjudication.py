@@ -80,14 +80,16 @@ class AdjudicationAgent(Agent):
             base = base - breakdown.copay_amount
             breakdown.notes.append(f"Co-pay {copay_pct}% applied on post-discount amount.")
 
-        # Sub-limit cap
+        # NOTE: Category `sub_limit` in the policy is interpreted as the
+        # ANNUAL cap for that category (not a per-claim cap). Per-claim
+        # cap is enforced upstream in LimitsAgent for OPD consultations.
+        # Annual category usage is not tracked yet (would require a per-member
+        # ledger keyed by category), so we do not apply it here.
         sub_limit = cat_cfg.get("sub_limit")
-        if sub_limit and base > sub_limit:
-            breakdown.sub_limit_applied = sub_limit
+        if sub_limit:
             breakdown.notes.append(
-                f"Capped at category sub-limit ₹{sub_limit:,.0f}."
+                f"Category annual sub-limit is ₹{sub_limit:,.0f} (not enforced per-claim)."
             )
-            base = sub_limit
 
         breakdown.final_approved = round(base, 2)
         ctx.calculation = breakdown

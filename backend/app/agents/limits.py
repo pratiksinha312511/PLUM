@@ -5,7 +5,7 @@ Checks per-claim limit (TC008), category sub-limit, and annual OPD limit.
 from __future__ import annotations
 
 from app.agents.base import Agent, PipelineContext
-from app.models.schemas import RejectionReason
+from app.models.schemas import ClaimCategory, RejectionReason
 
 
 class LimitsAgent(Agent):
@@ -20,8 +20,13 @@ class LimitsAgent(Agent):
         annual_opd = coverage.get("annual_opd_limit")
         sub_limit = cat_cfg.get("sub_limit")
 
+        # Per-claim limit applies to OPD consultation claims only.
+        # Dental, vision, pharmacy and diagnostic have their own (higher) sub-limits
+        # — capping them at the per-claim figure would invalidate those allowances.
+        applies_per_claim = sub.claim_category == ClaimCategory.CONSULTATION
+
         # Per-claim limit (HARD reject — TC008)
-        if per_claim and sub.claimed_amount > per_claim:
+        if applies_per_claim and per_claim and sub.claimed_amount > per_claim:
             ctx.rejection_reasons.append(RejectionReason.PER_CLAIM_EXCEEDED)
             ctx.notes = (
                 f"This policy caps a single claim at ₹{per_claim:,.0f}. "

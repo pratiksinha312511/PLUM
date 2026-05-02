@@ -23,8 +23,9 @@ class Settings:
         raw = os.getenv("POLICY_FILE", "../policy_terms.json")
         p = Path(raw)
         if not p.is_absolute():
-            # backend/app/core/config.py -> repo root is parents[3]
-            p = (Path(__file__).resolve().parents[3] / raw).resolve()
+            # backend/app/core/config.py -> backend dir is parents[2].
+            # Default value "../policy_terms.json" then resolves to repo root.
+            p = (Path(__file__).resolve().parents[2] / raw).resolve()
         return p
 
 
