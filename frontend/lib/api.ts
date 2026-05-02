@@ -126,6 +126,17 @@ export const api = {
     request<ClaimDecision>("/claims", { method: "POST", body: JSON.stringify(sub) }),
   list: () => request<ClaimDecision[]>("/claims"),
   get: (id: string) => request<ClaimDecision>(`/claims/${id}`),
+  upload: async (file: File, actualType: DocumentType): Promise<DocumentInput> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("actual_type", actualType);
+    const res = await fetch(`${API_BASE}/upload`, { method: "POST", body: fd });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`${res.status} ${res.statusText}: ${text}`);
+    }
+    return res.json() as Promise<DocumentInput>;
+  },
 };
 
 export function inr(n: number | undefined | null): string {

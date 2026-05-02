@@ -1,0 +1,55 @@
+# Render.com infra-as-code for the Plum claims system.
+# Two services: a FastAPI backend with a 1 GB persistent disk (so the SQLite
+# database survives deploys) and a Next.js frontend that proxies /api to it.
+#
+# After the first deploy, set SARVAM_API_KEY in the backend service's
+# Environment tab. NEXT_PUBLIC_API_URL on the frontend should point at the
+# backend's public URL (e.g. https://plum-claims-api.onrender.com).
+services:
+  - type: web
+    name: plum-claims-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: SARVAM_API_KEY
+        sync: false                       # set manually in dashboard
+      - key: SARVAM_BASE_URL
+        value: https://api.sarvam.ai/v1
+      - key: SARVAM_MODEL
+        value: sarvam-m
+      - key: SARVAM_VISION_MODEL
+        value: sarvam-vision
+      - key: LLM_ENABLED
+        value: "true"
+      - key: LLM_TIMEOUT_SECONDS
+        value: "30"
+      - key: DATABASE_URL
+        value: sqlite:////var/data/claims.db
+    disk:
+      name: claims-data
+      mountPath: /var/data
+      sizeGB: 1
+
+  - type: web
+    name: plum-claims-ui
+    runtime: node
+    plan: free
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20.11.0
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          type: web
+          name: plum-claims-api
+          property: host             # resolves to https://plum-claims-api.onrender.com

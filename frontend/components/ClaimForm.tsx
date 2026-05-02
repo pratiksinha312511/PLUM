@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ClaimSubmission,
@@ -468,10 +468,25 @@ export function ClaimForm({ presetId }: { presetId?: string }) {
                   onBlur={(e) => setDocContent(i, e.target.value)}
                 />
                 <p className="text-xs text-muted-foreground mt-2 italic">
-                  In production this is the structured payload our extraction layer
-                  produces from the uploaded image. Edit freely to model edge cases.
+                  Either edit the JSON directly, or upload an image / PDF below
+                  to have Sarvam vision extract the fields automatically.
                 </p>
               </div>
+
+              {/* Vision upload */}
+              <DocumentUploader
+                index={i}
+                doc={doc}
+                onExtracted={(extracted) =>
+                  setSubmission((s) => ({
+                    ...s,
+                    documents: s.documents.map((d, idx) =>
+                      idx === i ? { ...d, ...extracted } : d
+                    ),
+                  }))
+                }
+              />
+
               {submission.documents.length > 1 && (
                 <button
                   type="button"
@@ -516,5 +531,79 @@ export function ClaimForm({ presetId }: { presetId?: string }) {
         </button>
       </div>
     </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Document uploader -- posts the file to /upload, swaps in extracted content.
+// ---------------------------------------------------------------------------
+function DocumentUploader({
+  index,
+  doc,
+  onExtracted,
+}: {
+  index: number;
+  doc: DocumentInput;
+  onExtracted: (next: Partial<DocumentInput>) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [status, setStatus] = useState<"idle" | "uploading" | "ok" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleFile(file: File) {
+    setStatus("uploading");
+    setError(null);
+    try {
+      const result = await api.upload(file, doc.actual_type as DocumentType);
+      onExtracted({
+        file_id: result.file_id,
+        file_name: result.file_name,
+        actual_type: result.actual_type as DocumentType,
+        quality: (result.quality as DocumentQuality) || doc.quality,
+        patient_name_on_doc: result.patient_name_on_doc || doc.patient_name_on_doc,
+        content: result.content || {},
+      });
+      setStatus("ok");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setStatus("error");
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-dashed border-border bg-cream/40 p-4 mb-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs uppercase tracking-wider text-muted-foreground font-mono">
+          Doc {index + 1} - Upload via Sarvam vision
+        </div>
+        <button
+          type="button"
+          className="btn btn-outline text-xs"
+          onClick={() => inputRef.current?.click()}
+          disabled={status === "uploading"}
+        >
+          {status === "uploading" ? "Extracting..." : "Choose file"}
+        </button>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,application/pdf"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void handleFile(f);
+            e.target.value = "";
+          }}
+        />
+      </div>
+      {status === "ok" && (
+        <p className="text-xs text-emerald-700 mt-2 italic">
+          Extraction complete - content above has been replaced.
+        </p>
+      )}
+      {status === "error" && (
+        <p className="text-xs text-red-700 mt-2 italic">Upload failed: {error}</p>
+      )}
+    </div>
   );
 }

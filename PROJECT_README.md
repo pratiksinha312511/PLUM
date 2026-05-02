@@ -2,7 +2,9 @@
 
 > Multi-agent AI pipeline that automates health insurance claim adjudication for [PlumHQ](https://www.plumhq.com/).
 
-This is the implementation of the AI Engineer assignment. It accepts a claim with member details and uploaded documents, runs them through a deterministic multi-agent pipeline (with LLM-assisted document understanding via Sarvam AI), and produces an explainable decision: `APPROVED`, `PARTIAL`, `REJECTED`, or `MANUAL_REVIEW`.
+This is the implementation of the AI Engineer assignment. It accepts a claim with member details and uploaded documents, runs them through a deterministic multi-agent pipeline (with LLM-assisted document understanding via Sarvam AI — including **`sarvam-vision`** for OCR-style extraction from uploaded images / PDFs), and produces an explainable decision: `APPROVED`, `PARTIAL`, `REJECTED`, or `MANUAL_REVIEW`.
+
+**Deploy on Render**: see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). The repo ships a [`render.yaml`](render.yaml) blueprint that provisions a FastAPI backend (with a 1 GB persistent disk for the SQLite store) and a Next.js frontend in one click.
 
 ## Repository Layout
 

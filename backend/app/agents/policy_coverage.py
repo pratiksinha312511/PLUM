@@ -129,19 +129,26 @@ class PolicyCoverageAgent(Agent):
             test_text = self._collect_test_text(ctx).lower()
             matched = next((t for t in high_value_tests if t.lower() in test_text), None)
             if matched and sub.claimed_amount > threshold:
-                # In this assignment, pre-auth is never marked present in inputs,
-                # so we treat its absence as missing.
-                ctx.rejection_reasons.append(RejectionReason.PRE_AUTH_MISSING)
-                ctx.notes = (
-                    f"{matched} above ₹{threshold:,.0f} requires pre-authorization. "
-                    "To resubmit: contact Plum support, obtain a pre-auth reference, then upload it with this claim."
-                )
-                ctx.trace.add(
-                    self.name, "failed",
-                    f"Pre-auth required for {matched} (₹{sub.claimed_amount:,.0f} > ₹{threshold:,.0f}).",
-                    {"test": matched, "amount": sub.claimed_amount, "threshold": threshold},
-                )
-                return
+                # Pre-auth reference can be supplied via ClaimSubmission.pre_auth_reference;
+                # if absent we treat pre-auth as missing.
+                if sub.pre_auth_reference:
+                    ctx.trace.add(
+                        self.name, "passed",
+                        f"Pre-auth reference {sub.pre_auth_reference} accepted for {matched}.",
+                        {"pre_auth_reference": sub.pre_auth_reference, "test": matched},
+                    )
+                else:
+                    ctx.rejection_reasons.append(RejectionReason.PRE_AUTH_MISSING)
+                    ctx.notes = (
+                        f"{matched} above ₹{threshold:,.0f} requires pre-authorization. "
+                        "To resubmit: contact Plum support, obtain a pre-auth reference, then upload it with this claim."
+                    )
+                    ctx.trace.add(
+                        self.name, "failed",
+                        f"Pre-auth required for {matched} (₹{sub.claimed_amount:,.0f} > ₹{threshold:,.0f}).",
+                        {"test": matched, "amount": sub.claimed_amount, "threshold": threshold},
+                    )
+                    return
 
         # 4. Dental: split covered vs cosmetic line items (TC006)
         if sub.claim_category == ClaimCategory.DENTAL:

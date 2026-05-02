@@ -64,3 +64,30 @@ async def extract_text_via_llm(text: str) -> dict:
         return await client.chat_json(EXTRACTION_SYSTEM_PROMPT, text)
     except SarvamError:
         return {}
+
+
+VISION_USER_PROMPT = (
+    "Read this medical document image and return a strict JSON object with "
+    "the fields you can identify. Use null for missing fields. Never invent. "
+    "Fields: doctor_name, doctor_registration, patient_name, "
+    "date (YYYY-MM-DD), diagnosis, medicines (array of strings), "
+    "tests_ordered (array), hospital_name, line_items (array of "
+    "{description, amount}), total."
+)
+
+
+async def extract_image_via_llm(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
+    """Sarvam vision call for an uploaded document image.
+
+    Returns a dict in the same shape as the test fixtures' ``content``.
+    On any failure returns an empty dict — the caller is expected to mark
+    the document as POOR/UNREADABLE quality so the pipeline stops or
+    degrades cleanly.
+    """
+    client = SarvamClient()
+    try:
+        return await client.vision_json(
+            EXTRACTION_SYSTEM_PROMPT, VISION_USER_PROMPT, image_bytes, mime_type
+        )
+    except SarvamError:
+        return {}

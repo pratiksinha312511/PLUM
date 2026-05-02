@@ -95,6 +95,7 @@ class ClaimSubmission(BaseModel):
     ytd_claims_amount: float = 0
     claims_history: list[ClaimHistoryItem] = Field(default_factory=list)
     documents: list[DocumentInput] = Field(default_factory=list)
+    pre_auth_reference: Optional[str] = None
     simulate_component_failure: bool = False
 
 

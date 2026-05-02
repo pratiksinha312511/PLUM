@@ -14,8 +14,10 @@ class Settings:
     sarvam_api_key: str = os.getenv("SARVAM_API_KEY", "")
     sarvam_base_url: str = os.getenv("SARVAM_BASE_URL", "https://api.sarvam.ai")
     sarvam_model: str = os.getenv("SARVAM_MODEL", "sarvam-m")
+    sarvam_vision_model: str = os.getenv("SARVAM_VISION_MODEL", "sarvam-vision")
     llm_enabled: bool = os.getenv("LLM_ENABLED", "true").lower() == "true"
-    llm_timeout_seconds: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
+    llm_timeout_seconds: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
+    database_url: str = os.getenv("DATABASE_URL", "sqlite:///./claims.db")
 
     # Resolve policy file relative to repo root if not absolute.
     @property
