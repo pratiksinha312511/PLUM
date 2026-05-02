@@ -267,7 +267,7 @@ export function ClaimForm({ presetId }: { presetId?: string }) {
     setError(null);
     try {
       const decision = await api.submit(submission);
-      router.push(`/claims/${decision.claim_id}`);
+      router.push(`/claims/detail/?id=${encodeURIComponent(decision.claim_id)}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSubmitting(false);

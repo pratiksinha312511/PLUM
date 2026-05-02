@@ -169,7 +169,7 @@ export function LineItemsTable({
 export function ClaimSummaryCard({ d }: { d: ClaimDecision }) {
   return (
     <Link
-      href={`/claims/${d.claim_id}`}
+      href={`/claims/detail/?id=${encodeURIComponent(d.claim_id)}`}
       className="card card-hover p-6 block group"
     >
       <div className="flex items-baseline justify-between mb-3">

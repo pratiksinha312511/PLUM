@@ -1,9 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  async rewrites() {
-    const api = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    return [{ source: "/api/:path*", destination: `${api}/:path*` }];
-  },
+  // Static export -- FastAPI will serve `out/` directly so the whole app
+  // (UI + API) lives behind a single URL on Render.
+  output: "export",
+  trailingSlash: true,
+  images: { unoptimized: true },
 };
 module.exports = nextConfig;

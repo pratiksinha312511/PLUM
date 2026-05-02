@@ -1,10 +1,19 @@
-"""FastAPI entrypoint."""
+"""FastAPI entrypoint.
+
+Serves both the JSON API (under ``/api/*``) and the statically-exported
+Next.js frontend (mounted at ``/``) so the whole app runs from one Render
+service / one URL.
+"""
 from __future__ import annotations
 
+import os
 import uuid
+from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.agents.extraction import extract_image_via_llm
 from app.core.policy import get_policy
@@ -15,7 +24,9 @@ from app.services import store
 app = FastAPI(
     title="Plum Claims API",
     description="Multi-agent health insurance claims processing pipeline.",
-    version="1.1.0",
+    version="1.2.0",
+    docs_url="/api/docs",
+    openapi_url="/api/openapi.json",
 )
 
 app.add_middleware(
@@ -31,30 +42,36 @@ async def _startup() -> None:
     store.init()
 
 
-@app.get("/health")
+# ---------------------------------------------------------------------------
+# JSON API – mounted under /api so the static frontend can own /
+# ---------------------------------------------------------------------------
+api = APIRouter(prefix="/api")
+
+
+@api.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/policy")
+@api.get("/policy")
 async def policy() -> dict:
     """Return the active policy (used by the UI to render forms / requirements)."""
     return get_policy().raw
 
 
-@app.post("/claims", response_model=ClaimDecision)
+@api.post("/claims", response_model=ClaimDecision)
 async def submit_claim(submission: ClaimSubmission) -> ClaimDecision:
     decision = await run_pipeline(submission)
     store.save(decision)
     return decision
 
 
-@app.get("/claims", response_model=list[ClaimDecision])
+@api.get("/claims", response_model=list[ClaimDecision])
 async def list_claims() -> list[ClaimDecision]:
     return store.list_all()
 
 
-@app.get("/claims/{claim_id}", response_model=ClaimDecision)
+@api.get("/claims/{claim_id}", response_model=ClaimDecision)
 async def get_claim(claim_id: str) -> ClaimDecision:
     found = store.get(claim_id)
     if not found:
@@ -62,7 +79,7 @@ async def get_claim(claim_id: str) -> ClaimDecision:
     return found
 
 
-@app.get("/members/{member_id}/claims", response_model=list[ClaimDecision])
+@api.get("/members/{member_id}/claims", response_model=list[ClaimDecision])
 async def member_claims(member_id: str) -> list[ClaimDecision]:
     return store.list_for_member(member_id)
 
@@ -73,7 +90,7 @@ async def member_claims(member_id: str) -> list[ClaimDecision]:
 _ALLOWED_MIME = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
 
 
-@app.post("/upload")
+@api.post("/upload")
 async def upload_document(
     file: UploadFile = File(...),
     actual_type: str = Form("UNKNOWN"),
@@ -114,3 +131,37 @@ async def upload_document(
         "patient_name_on_doc": content.get("patient_name") if content else None,
         "content": content,
     }
+
+
+app.include_router(api)
+
+
+# ---------------------------------------------------------------------------
+# Static frontend (Next.js export) – mounted last so /api/* takes precedence.
+# ---------------------------------------------------------------------------
+# Resolution order:
+#   1. $FRONTEND_DIST  (set on Render)
+#   2. ../frontend/out (local dev once `next build` has been run)
+_FRONTEND_DIR = Path(
+    os.getenv("FRONTEND_DIST")
+    or (Path(__file__).resolve().parents[2] / "frontend" / "out")
+)
+
+if _FRONTEND_DIR.exists():
+    # html=True makes StaticFiles serve index.html for directory requests
+    # (e.g. /submit/ -> /submit/index.html), which is what `next export`
+    # produces for app-router routes.
+    app.mount("/_next", StaticFiles(directory=_FRONTEND_DIR / "_next"), name="_next")
+    app.mount("/", StaticFiles(directory=_FRONTEND_DIR, html=True), name="frontend")
+else:
+    @app.get("/")
+    async def _root_no_frontend() -> dict:
+        return {
+            "status": "ok",
+            "message": (
+                "Plum Claims API is running. The static frontend was not found at "
+                f"{_FRONTEND_DIR}. Set FRONTEND_DIST or build the frontend with "
+                "`npm run build` before starting the server."
+            ),
+            "docs": "/api/docs",
+        }

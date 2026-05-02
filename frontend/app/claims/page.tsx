@@ -1,20 +1,29 @@
+"use client";
+
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { SiteHeader, SiteFooter } from "@/components/Chrome";
 import { ClaimSummaryCard } from "@/components/Decision";
 import { API_BASE, ClaimDecision } from "@/lib/api";
 
-async function fetchAll(): Promise<ClaimDecision[]> {
-  try {
-    const res = await fetch(`${API_BASE}/claims`, { cache: "no-store" });
-    if (!res.ok) return [];
-    return res.json();
-  } catch {
-    return [];
-  }
-}
+export default function ClaimsPage() {
+  const [claims, setClaims] = useState<ClaimDecision[] | null>(null);
 
-export default async function ClaimsPage() {
-  const claims = await fetchAll();
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/claims`, { cache: "no-store" });
+        const data = res.ok ? ((await res.json()) as ClaimDecision[]) : [];
+        if (!cancelled) setClaims(data);
+      } catch {
+        if (!cancelled) setClaims([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <>
@@ -38,7 +47,9 @@ export default async function ClaimsPage() {
           </Link>
         </div>
 
-        {claims.length === 0 ? (
+        {claims === null ? (
+          <p className="small-caps">Loading…</p>
+        ) : claims.length === 0 ? (
           <div className="card p-14 text-center">
             <p className="font-serif text-2xl mb-2">No decisions yet.</p>
             <p className="text-muted-foreground mb-8">

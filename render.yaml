@@ -1,23 +1,30 @@
-# Render.com infra-as-code for the Plum claims system.
-# Two services: a FastAPI backend with a 1 GB persistent disk (so the SQLite
-# database survives deploys) and a Next.js frontend that proxies /api to it.
+# Single-service Render deployment.
 #
-# After the first deploy, set SARVAM_API_KEY in the backend service's
-# Environment tab. NEXT_PUBLIC_API_URL on the frontend should point at the
-# backend's public URL (e.g. https://plum-claims-api.onrender.com).
+# The FastAPI backend serves both:
+#   * /api/*           - the JSON API
+#   * /, /submit/, ... - the statically-exported Next.js frontend (out/)
+#
+# So one URL hosts the entire PLUM app.
+#
+# Set SARVAM_API_KEY in the Render dashboard after the first deploy.
 services:
   - type: web
-    name: plum-claims-api
+    name: plum-claims
     runtime: python
     plan: free
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /health
+    rootDir: .
+    buildCommand: |
+      set -e
+      cd frontend && npm install && npm run build
+      cd ../backend && pip install -r requirements.txt
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
     autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.7
+      - key: NODE_VERSION
+        value: 20.11.0
       - key: SARVAM_API_KEY
         sync: false                       # set manually in dashboard
       - key: SARVAM_BASE_URL
@@ -32,24 +39,9 @@ services:
         value: "30"
       - key: DATABASE_URL
         value: sqlite:////var/data/claims.db
+      - key: FRONTEND_DIST
+        value: /opt/render/project/src/frontend/out
     disk:
       name: claims-data
       mountPath: /var/data
       sizeGB: 1
-
-  - type: web
-    name: plum-claims-ui
-    runtime: node
-    plan: free
-    rootDir: frontend
-    buildCommand: npm install && npm run build
-    startCommand: npm start
-    autoDeploy: true
-    envVars:
-      - key: NODE_VERSION
-        value: 20.11.0
-      - key: NEXT_PUBLIC_API_URL
-        fromService:
-          type: web
-          name: plum-claims-api
-          property: host             # resolves to https://plum-claims-api.onrender.com

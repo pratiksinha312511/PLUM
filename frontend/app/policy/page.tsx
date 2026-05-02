@@ -1,3 +1,6 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { SiteHeader, SiteFooter } from "@/components/Chrome";
 import { API_BASE, inr } from "@/lib/api";
 
@@ -15,18 +18,37 @@ interface PolicyDoc {
   fraud_thresholds: Record<string, number>;
 }
 
-async function fetchPolicy(): Promise<PolicyDoc | null> {
-  try {
-    const res = await fetch(`${API_BASE}/policy`, { cache: "no-store" });
-    if (!res.ok) return null;
-    return res.json();
-  } catch {
-    return null;
-  }
-}
+export default function PolicyPage() {
+  const [p, setP] = useState<PolicyDoc | null | "loading">("loading");
 
-export default async function PolicyPage() {
-  const p = await fetchPolicy();
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/policy`, { cache: "no-store" });
+        const data = res.ok ? ((await res.json()) as PolicyDoc) : null;
+        if (!cancelled) setP(data);
+      } catch {
+        if (!cancelled) setP(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (p === "loading") {
+    return (
+      <>
+        <SiteHeader />
+        <main className="editorial-container py-32 text-center">
+          <p className="small-caps">Loading policy…</p>
+        </main>
+        <SiteFooter />
+      </>
+    );
+  }
+
   if (!p) {
     return (
       <>

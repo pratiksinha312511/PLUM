@@ -1,5 +1,8 @@
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// In production the frontend is served by FastAPI itself, so we hit
+// same-origin /api routes. For local dev, point NEXT_PUBLIC_API_URL at the
+// uvicorn server (e.g. http://localhost:8000) and we'll prefix /api there too.
+const RAW_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+export const API_BASE = `${RAW_BASE.replace(/\/$/, "")}/api`;
 
 export type ClaimCategory =
   | "CONSULTATION"
