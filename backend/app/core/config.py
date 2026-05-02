@@ -1,0 +1,33 @@
+"""Application config loaded from environment variables."""
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+class Settings:
+    sarvam_api_key: str = os.getenv("SARVAM_API_KEY", "")
+    sarvam_base_url: str = os.getenv("SARVAM_BASE_URL", "https://api.sarvam.ai")
+    sarvam_model: str = os.getenv("SARVAM_MODEL", "sarvam-m")
+    llm_enabled: bool = os.getenv("LLM_ENABLED", "true").lower() == "true"
+    llm_timeout_seconds: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
+
+    # Resolve policy file relative to repo root if not absolute.
+    @property
+    def policy_file(self) -> Path:
+        raw = os.getenv("POLICY_FILE", "../policy_terms.json")
+        p = Path(raw)
+        if not p.is_absolute():
+            # backend/app/core/config.py -> repo root is parents[3]
+            p = (Path(__file__).resolve().parents[3] / raw).resolve()
+        return p
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
