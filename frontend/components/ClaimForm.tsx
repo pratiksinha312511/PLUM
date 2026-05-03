@@ -695,16 +695,31 @@ function DocumentCard({
             </button>
           </div>
 
-          {(meta?.warnings?.length || 0) > 0 && (
-            <div className="mt-3 rounded border-l-2 border-l-[var(--warning)] bg-[rgba(255,179,0,0.08)] p-3 text-sm">
-              <p className="small-caps mb-1">Please verify</p>
-              <ul className="list-disc list-inside space-y-0.5 text-foreground/90">
-                {meta!.warnings!.map((w, k) => (
-                  <li key={k}>{w}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+          {(meta?.warnings?.length || 0) > 0 && (() => {
+            const isError = meta?.status && meta.status !== "OK";
+            return (
+              <div
+                className={`mt-3 rounded border-l-2 p-3 text-sm ${
+                  isError
+                    ? "border-l-[var(--danger)] bg-[rgba(179,38,30,0.05)]"
+                    : "border-l-[var(--warning)] bg-[rgba(255,179,0,0.08)]"
+                }`}
+              >
+                <p
+                  className={`small-caps mb-1 ${
+                    isError ? "!text-[var(--danger)]" : ""
+                  }`}
+                >
+                  {isError ? "Auto-extraction unavailable" : "Please verify"}
+                </p>
+                <ul className="list-disc list-inside space-y-0.5 text-foreground/90">
+                  {meta!.warnings!.map((w, k) => (
+                    <li key={k}>{w}</li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })()}
 
           <button
             type="button"

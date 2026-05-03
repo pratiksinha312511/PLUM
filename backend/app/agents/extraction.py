@@ -144,9 +144,34 @@ async def extract_image_via_llm(image_bytes: bytes, mime_type: str = "image/jpeg
             VISION_SYSTEM_PROMPT, VISION_USER_PROMPT, image_bytes, mime_type
         )
     except SarvamError as exc:
-        return _failed_envelope("LLM_ERROR", str(exc))
+        return _failed_envelope("LLM_ERROR", _friendly_llm_error(str(exc)))
 
     return _coerce_envelope(raw)
+
+
+def _friendly_llm_error(raw: str) -> str:
+    """Turn raw httpx error text into something safe to show end-users."""
+    text = raw.strip()
+    low = text.lower()
+    if "401" in low or "unauthorized" in low:
+        return (
+            "The vision service rejected our credentials. "
+            "Please ask an administrator to refresh the SARVAM_API_KEY."
+        )
+    if "403" in low or "forbidden" in low:
+        return (
+            "The vision service refused this request (403). "
+            "The API key is missing, expired, or not allowed from this server. "
+            "You can still fill the document details manually below."
+        )
+    if "429" in low or "rate" in low:
+        return "The vision service is rate-limiting us. Please retry in a minute."
+    if "timeout" in low or "timed out" in low:
+        return "The vision service timed out. Please retry, or fill the details manually."
+    if "connection" in low or "network" in low:
+        return "Could not reach the vision service. Check connectivity and retry."
+    # Strip the noisy MDN URL httpx appends.
+    return text.split(" For more information")[0][:240]
 
 
 def _failed_envelope(status: str, reason: str) -> dict[str, Any]:
