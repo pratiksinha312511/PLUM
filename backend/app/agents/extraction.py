@@ -120,9 +120,42 @@ VISION_USER_PROMPT = (
     "Analyse this document image and return the JSON envelope as specified."
 )
 
+# When we hand OCR text (no image) to the text LLM we use the same envelope
+# rules but reword the framing so the model knows it's reading raw OCR.
+OCR_SYSTEM_PROMPT = VISION_SYSTEM_PROMPT.replace(
+    "You will be shown ONE image of a single medical document",
+    "You will be given the raw OCR text of a single medical document",
+).replace(
+    "If the image is blank, blurry, rotated badly, or not a medical "
+    "document, set quality=UNREADABLE and doc_type=UNKNOWN.",
+    "If the OCR text is empty, gibberish, or clearly not a medical "
+    "document, set quality=UNREADABLE and doc_type=UNKNOWN. "
+    "If the text is readable but sparse / partially garbled, mark "
+    "quality=POOR and still extract whatever you can.",
+)
+
+
+def _ocr_user_prompt(text: str) -> str:
+    snippet = text.strip()
+    # Hard cap to keep prompt tokens bounded; medical docs rarely need more.
+    if len(snippet) > 6000:
+        snippet = snippet[:6000] + "\n...[truncated]"
+    return (
+        "Below is the raw OCR text extracted from a medical document. "
+        "Classify it and extract the structured envelope.\n\n"
+        "===== BEGIN OCR TEXT =====\n"
+        f"{snippet}\n"
+        "===== END OCR TEXT ====="
+    )
+
 
 async def extract_image_via_llm(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
-    """Sarvam vision call for an uploaded document image.
+    """Two-stage extraction: OCR.space for text, Sarvam text LLM for structure.
+
+    We previously called Sarvam's vision endpoint directly, but it rejects
+    requests from several cloud egress IPs (403 Forbidden). OCR.space is
+    a reliable free OCR layer; the text LLM then handles classification +
+    field extraction with the same envelope guarantees.
 
     Returns a validated envelope:
         {
@@ -132,21 +165,56 @@ async def extract_image_via_llm(image_bytes: bytes, mime_type: str = "image/jpeg
           "patient_name": str | None,
           "fields": dict,             # the same shape pipelines consume
           "warnings": [str],
-          "extraction_status": "OK" | "LLM_ERROR" | "INVALID_RESPONSE",
+          "extraction_status": "OK" | "LLM_ERROR" | "INVALID_RESPONSE" | "OCR_ERROR",
         }
-    The caller can drop ``fields`` straight into ``DocumentInput.content``.
-    On any failure we mark quality=UNREADABLE so DocumentVerificationAgent
-    halts the claim with the right user-facing message.
     """
-    client = SarvamClient()
-    try:
-        raw = await client.vision_json(
-            VISION_SYSTEM_PROMPT, VISION_USER_PROMPT, image_bytes, mime_type
-        )
-    except SarvamError as exc:
-        return _failed_envelope("LLM_ERROR", _friendly_llm_error(str(exc)))
+    # Lazy import to avoid a circular dep at module load.
+    from app.services.ocr_space import OcrSpaceClient, OcrSpaceError
 
-    return _coerce_envelope(raw)
+    ocr = OcrSpaceClient()
+    try:
+        text = await ocr.parse_image(image_bytes, mime_type)
+    except OcrSpaceError as exc:
+        return _failed_envelope("OCR_ERROR", _friendly_ocr_error(str(exc)))
+
+    sarvam = SarvamClient()
+    try:
+        raw = await sarvam.chat_json(OCR_SYSTEM_PROMPT, _ocr_user_prompt(text))
+    except SarvamError as exc:
+        # OCR worked but the LLM didn't — degrade gracefully and at least
+        # surface the raw text so the user can copy/paste into the editor.
+        envelope = _failed_envelope("LLM_ERROR", _friendly_llm_error(str(exc)))
+        envelope["fields"] = {"raw_ocr_text": text[:2000]}
+        envelope["quality"] = "POOR"
+        return envelope
+
+    envelope = _coerce_envelope(raw)
+    # Always preserve the raw OCR text in case the user wants to verify.
+    envelope.setdefault("fields", {})
+    if "raw_ocr_text" not in envelope["fields"]:
+        envelope["fields"]["raw_ocr_text"] = text[:2000]
+    return envelope
+
+
+def _friendly_ocr_error(raw: str) -> str:
+    text = raw.strip()
+    low = text.lower()
+    if "no text" in low:
+        return (
+            "OCR could not read any text from this file. The image may be "
+            "blank, too blurry, or upside down. Please re-upload a clearer "
+            "scan, or fill the details manually below."
+        )
+    if "401" in low or "403" in low or "unauthorized" in low or "forbidden" in low:
+        return (
+            "The OCR service rejected our credentials. "
+            "Please ask an administrator to refresh OCR_SPACE_API_KEY."
+        )
+    if "timeout" in low or "timed out" in low:
+        return "The OCR service timed out. Please retry, or fill the details manually."
+    if "disabled" in low:
+        return "OCR is not configured on this server. Please fill the details manually."
+    return text.split(" For more information")[0][:240]
 
 
 def _friendly_llm_error(raw: str) -> str:

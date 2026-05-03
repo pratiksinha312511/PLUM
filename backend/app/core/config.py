@@ -19,6 +19,18 @@ class Settings:
     llm_timeout_seconds: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./claims.db")
 
+    # OCR.space (https://ocr.space/ocrapi) — used as the primary OCR engine
+    # in front of Sarvam's text LLM, since the vision endpoint is unreliable
+    # from some egress IPs. Free tier: K87019029488957 has 25k calls/month.
+    ocr_space_api_key: str = os.getenv("OCR_SPACE_API_KEY", "K87019029488957")
+    ocr_space_url: str = os.getenv(
+        "OCR_SPACE_URL", "https://api.ocr.space/parse/image"
+    )
+    ocr_space_engine: int = int(os.getenv("OCR_SPACE_ENGINE", "2"))
+    ocr_space_timeout_seconds: float = float(
+        os.getenv("OCR_SPACE_TIMEOUT_SECONDS", "45")
+    )
+
     # Resolve policy file relative to repo root if not absolute.
     @property
     def policy_file(self) -> Path:
