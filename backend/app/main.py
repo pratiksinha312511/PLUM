@@ -93,13 +93,14 @@ _ALLOWED_MIME = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
 @api.post("/upload")
 async def upload_document(
     file: UploadFile = File(...),
-    actual_type: str = Form("UNKNOWN"),
+    actual_type: str | None = Form(None),
 ) -> dict:
-    """Accept an image (or PDF) of a medical document and return structured
-    fields extracted by the Sarvam vision model.
+    """Accept an image / PDF of a medical document, classify + extract via
+    Sarvam vision, and return a fully-populated payload that drops straight
+    into ``ClaimSubmission.documents[]``.
 
-    The response is shaped to drop straight into a ClaimSubmission's
-    ``documents[]`` array, so the frontend can attach it to the form.
+    The user does not need to tell us the document type; the model decides.
+    If the user *does* override (form field ``actual_type``) we honour it.
     """
     if file.content_type not in _ALLOWED_MIME:
         raise HTTPException(
@@ -112,24 +113,39 @@ async def upload_document(
         raise HTTPException(status_code=413, detail="File too large (max 8 MB).")
 
     mime = file.content_type or "image/jpeg"
-    content = await extract_image_via_llm(raw, mime_type=mime)
+    envelope = await extract_image_via_llm(raw, mime_type=mime)
 
-    # If the LLM returned nothing usable we mark quality as UNREADABLE so the
-    # DocumentVerificationAgent halts the claim with a specific re-upload prompt.
-    quality = "GOOD" if content else "UNREADABLE"
+    # User override wins over model classification.
+    if actual_type:
+        try:
+            chosen_type = DocumentType(actual_type.upper()).value
+            user_overrode = chosen_type != envelope["doc_type"]
+        except ValueError:
+            chosen_type = envelope["doc_type"]
+            user_overrode = False
+    else:
+        chosen_type = envelope["doc_type"]
+        user_overrode = False
 
-    try:
-        doc_type = DocumentType(actual_type.upper())
-    except ValueError:
-        doc_type = DocumentType.UNKNOWN
+    needs_review = (
+        envelope["extraction_status"] != "OK"
+        or envelope["quality"] != "GOOD"
+        or envelope["doc_type_confidence"] < 0.7
+        or chosen_type == "UNKNOWN"
+    )
 
     return {
         "file_id": f"F{uuid.uuid4().hex[:6].upper()}",
         "file_name": file.filename,
-        "actual_type": doc_type.value,
-        "quality": quality,
-        "patient_name_on_doc": content.get("patient_name") if content else None,
-        "content": content,
+        "actual_type": chosen_type,
+        "actual_type_confidence": envelope["doc_type_confidence"],
+        "actual_type_overridden": user_overrode,
+        "quality": envelope["quality"],
+        "patient_name_on_doc": envelope["patient_name"],
+        "content": envelope["fields"],
+        "warnings": envelope["warnings"],
+        "extraction_status": envelope["extraction_status"],
+        "needs_review": needs_review,
     }
 
 

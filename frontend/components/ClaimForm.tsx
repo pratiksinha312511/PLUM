@@ -226,6 +226,7 @@ export function ClaimForm({ presetId }: { presetId?: string }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activePreset, setActivePreset] = useState<string | null>(null);
+  const [docMeta, setDocMeta] = useState<Record<number, DocMeta>>({});
 
   // Apply preset if URL specifies one
   useEffect(() => {
@@ -401,114 +402,75 @@ export function ClaimForm({ presetId }: { presetId?: string }) {
         </div>
         <div className="space-y-6">
           {submission.documents.map((doc, i) => (
-            <div key={i} className="card p-6">
-              <div className="grid md:grid-cols-4 gap-4 mb-4">
-                <div>
-                  <label className="label">File ID</label>
-                  <input
-                    className="input"
-                    value={doc.file_id}
-                    onChange={(e) => setDoc(i, { file_id: e.target.value })}
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="label">File name</label>
-                  <input
-                    className="input"
-                    value={doc.file_name || ""}
-                    onChange={(e) => setDoc(i, { file_name: e.target.value })}
-                    placeholder="prescription.jpg"
-                  />
-                </div>
-                <div>
-                  <label className="label">Quality</label>
-                  <select
-                    className="select"
-                    value={doc.quality}
-                    onChange={(e) => setDoc(i, { quality: e.target.value as DocumentQuality })}
-                  >
-                    {QUALITIES.map((q) => (
-                      <option key={q} value={q}>
-                        {q}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div className="grid md:grid-cols-2 gap-4 mb-4">
-                <div>
-                  <label className="label">Document type</label>
-                  <select
-                    className="select"
-                    value={doc.actual_type}
-                    onChange={(e) => setDoc(i, { actual_type: e.target.value as DocumentType })}
-                  >
-                    {DOC_TYPES.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Patient name on document</label>
-                  <input
-                    className="input"
-                    value={doc.patient_name_on_doc || ""}
-                    onChange={(e) => setDoc(i, { patient_name_on_doc: e.target.value })}
-                    placeholder="optional, used for cross-validation"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="label">Structured content (JSON)</label>
-                <textarea
-                  className="textarea font-mono text-sm"
-                  defaultValue={JSON.stringify(doc.content || {}, null, 2)}
-                  onBlur={(e) => setDocContent(i, e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground mt-2 italic">
-                  Either edit the JSON directly, or upload an image / PDF below
-                  to have Sarvam vision extract the fields automatically.
-                </p>
-              </div>
-
-              {/* Vision upload */}
-              <DocumentUploader
-                index={i}
-                doc={doc}
-                onExtracted={(extracted) =>
+            <DocumentCard
+              key={i}
+              index={i}
+              doc={doc}
+              docTypes={DOC_TYPES}
+              qualities={QUALITIES}
+              autoExpand={!!docMeta[i]?.needsReview}
+              meta={docMeta[i]}
+              showRemove={submission.documents.length > 1}
+              onChange={(patch) => setDoc(i, patch)}
+              onChangeContent={(text) => setDocContent(i, text)}
+              onRemove={() =>
+                setSubmission((s) => ({
+                  ...s,
+                  documents: s.documents.filter((_, idx) => idx !== i),
+                }))
+              }
+              onUpload={async (file) => {
+                setDocMeta((m) => ({ ...m, [i]: { uploading: true } }));
+                try {
+                  const result = await api.upload(file);
                   setSubmission((s) => ({
                     ...s,
                     documents: s.documents.map((d, idx) =>
-                      idx === i ? { ...d, ...extracted } : d
+                      idx === i
+                        ? {
+                            ...d,
+                            file_id: result.file_id,
+                            file_name: result.file_name,
+                            actual_type: result.actual_type as DocumentType,
+                            quality: result.quality as DocumentQuality,
+                            patient_name_on_doc:
+                              result.patient_name_on_doc || d.patient_name_on_doc,
+                            content: result.content || {},
+                          }
+                        : d
                     ),
-                  }))
+                  }));
+                  setDocMeta((m) => ({
+                    ...m,
+                    [i]: {
+                      uploading: false,
+                      confidence: result.actual_type_confidence,
+                      warnings: result.warnings,
+                      status: result.extraction_status,
+                      needsReview: result.needs_review,
+                      uploaded: true,
+                    },
+                  }));
+                } catch (err) {
+                  setDocMeta((m) => ({
+                    ...m,
+                    [i]: {
+                      uploading: false,
+                      error: err instanceof Error ? err.message : String(err),
+                      needsReview: true,
+                      uploaded: false,
+                    },
+                  }));
                 }
-              />
-
-              {submission.documents.length > 1 && (
-                <button
-                  type="button"
-                  className="btn btn-ghost mt-3 !text-xs"
-                  onClick={() =>
-                    setSubmission((s) => ({
-                      ...s,
-                      documents: s.documents.filter((_, idx) => idx !== i),
-                    }))
-                  }
-                >
-                  Remove document
-                </button>
-              )}
-            </div>
+              }}
+            />
           ))}
           <button
             type="button"
             className="btn btn-outline"
-            onClick={() =>
-              setSubmission((s) => ({ ...s, documents: [...s.documents, EMPTY_DOC()] }))
-            }
+            onClick={() => {
+              setSubmission((s) => ({ ...s, documents: [...s.documents, EMPTY_DOC()] }));
+            }}
           >
             + Add document
           </button>
@@ -535,74 +497,306 @@ export function ClaimForm({ presetId }: { presetId?: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Document uploader -- posts the file to /upload, swaps in extracted content.
+// Per-document upload-first card.
+//
+// State machine:
+//   1. idle      -> show big drop-zone
+//   2. uploading -> spinner with "Reading your document..."
+//   3. extracted -> compact preview (type pill, patient, quality, confidence)
+//                   with "Edit details" expander; auto-expands when needs_review
+//   4. error     -> red banner + manual entry surfaced
 // ---------------------------------------------------------------------------
-function DocumentUploader({
+type DocMeta = {
+  uploading?: boolean;
+  uploaded?: boolean;
+  confidence?: number;
+  warnings?: string[];
+  status?: "OK" | "LLM_ERROR" | "INVALID_RESPONSE";
+  needsReview?: boolean;
+  error?: string;
+};
+
+function DocumentCard({
   index,
   doc,
-  onExtracted,
+  meta,
+  docTypes,
+  qualities,
+  autoExpand,
+  showRemove,
+  onChange,
+  onChangeContent,
+  onUpload,
+  onRemove,
 }: {
   index: number;
   doc: DocumentInput;
-  onExtracted: (next: Partial<DocumentInput>) => void;
+  meta: DocMeta | undefined;
+  docTypes: DocumentType[];
+  qualities: DocumentQuality[];
+  autoExpand: boolean;
+  showRemove: boolean;
+  onChange: (patch: Partial<DocumentInput>) => void;
+  onChangeContent: (text: string) => void;
+  onUpload: (file: File) => Promise<void>;
+  onRemove: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [status, setStatus] = useState<"idle" | "uploading" | "ok" | "error">("idle");
-  const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
-  async function handleFile(file: File) {
-    setStatus("uploading");
-    setError(null);
-    try {
-      const result = await api.upload(file, doc.actual_type as DocumentType);
-      onExtracted({
-        file_id: result.file_id,
-        file_name: result.file_name,
-        actual_type: result.actual_type as DocumentType,
-        quality: (result.quality as DocumentQuality) || doc.quality,
-        patient_name_on_doc: result.patient_name_on_doc || doc.patient_name_on_doc,
-        content: result.content || {},
-      });
-      setStatus("ok");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setStatus("error");
-    }
+  // Auto-open the manual editor whenever extraction needs human review.
+  useEffect(() => {
+    if (autoExpand) setExpanded(true);
+  }, [autoExpand]);
+
+  const uploaded = meta?.uploaded === true;
+  const uploading = meta?.uploading === true;
+  const fieldCount = Object.keys(doc.content || {}).filter(
+    (k) => (doc.content as Record<string, unknown>)?.[k] != null
+  ).length;
+
+  function pickFile() {
+    inputRef.current?.click();
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) void onUpload(f);
   }
 
   return (
-    <div className="rounded-lg border border-dashed border-border bg-cream/40 p-4 mb-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs uppercase tracking-wider text-muted-foreground font-mono">
-          Doc {index + 1} - Upload via Sarvam vision
-        </div>
-        <button
-          type="button"
-          className="btn btn-outline text-xs"
-          onClick={() => inputRef.current?.click()}
-          disabled={status === "uploading"}
-        >
-          {status === "uploading" ? "Extracting..." : "Choose file"}
-        </button>
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/jpeg,image/png,image/webp,application/pdf"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void handleFile(f);
-            e.target.value = "";
-          }}
-        />
-      </div>
-      {status === "ok" && (
-        <p className="text-xs text-emerald-700 mt-2 italic">
-          Extraction complete - content above has been replaced.
+    <div className="card p-6">
+      <div className="flex items-center justify-between mb-4">
+        <p className="font-mono text-[0.65rem] tracking-widest text-muted-foreground uppercase">
+          Document {index + 1}
         </p>
+        {showRemove && (
+          <button
+            type="button"
+            className="btn btn-ghost !text-xs"
+            onClick={onRemove}
+          >
+            Remove
+          </button>
+        )}
+      </div>
+
+      {/* State 1 / 2: drop-zone */}
+      {!uploaded && (
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+          onClick={pickFile}
+          className={`rounded-lg border border-dashed p-10 text-center cursor-pointer transition-colors ${
+            dragOver
+              ? "border-accent bg-[var(--accent-muted)]"
+              : "border-border bg-cream/40 hover:bg-cream/70"
+          }`}
+        >
+          {uploading ? (
+            <div className="space-y-2">
+              <p className="small-caps">Reading your document…</p>
+              <p className="text-xs text-muted-foreground">
+                Sarvam vision is classifying and extracting fields.
+                This usually takes 5–20 seconds.
+              </p>
+            </div>
+          ) : (
+            <>
+              <p className="font-serif text-xl mb-2">
+                Drop a prescription, bill, or report here
+              </p>
+              <p className="text-sm text-muted-foreground mb-4">
+                JPEG, PNG, WEBP or PDF · up to 8 MB · we'll detect the type
+                and fill the fields automatically.
+              </p>
+              <button type="button" className="btn btn-outline">
+                Choose file
+              </button>
+            </>
+          )}
+          <input
+            ref={inputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,application/pdf"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void onUpload(f);
+              e.target.value = "";
+            }}
+          />
+        </div>
       )}
-      {status === "error" && (
-        <p className="text-xs text-red-700 mt-2 italic">Upload failed: {error}</p>
+
+      {/* State 4: error */}
+      {meta?.error && (
+        <div className="mt-3 rounded-md border-l-2 border-l-[var(--danger)] bg-[rgba(179,38,30,0.05)] p-3 text-sm">
+          <p className="small-caps !text-[var(--danger)] mb-1">Upload failed</p>
+          <p className="text-foreground/90">{meta.error}</p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            You can still enter the details manually below.
+          </p>
+        </div>
+      )}
+
+      {/* State 3: preview after a successful upload */}
+      {uploaded && (
+        <div className="rounded-lg border border-border bg-cream/30 p-4 mb-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-serif text-lg mb-1">
+                {doc.file_name || doc.file_id}
+              </p>
+              <div className="flex flex-wrap gap-2 items-center text-xs">
+                <span className="pill">{doc.actual_type}</span>
+                <span className="text-muted-foreground">
+                  Quality:{" "}
+                  <span
+                    className={
+                      doc.quality === "GOOD"
+                        ? "text-emerald-700"
+                        : doc.quality === "UNREADABLE"
+                        ? "text-[var(--danger)]"
+                        : "text-[var(--warning)]"
+                    }
+                  >
+                    {doc.quality}
+                  </span>
+                </span>
+                {meta?.confidence != null && (
+                  <span className="text-muted-foreground font-mono">
+                    conf {meta.confidence.toFixed(2)}
+                  </span>
+                )}
+              </div>
+              {doc.patient_name_on_doc && (
+                <p className="text-sm text-foreground/90 mt-2">
+                  Patient: <strong>{doc.patient_name_on_doc}</strong>
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground mt-2">
+                {fieldCount} field{fieldCount === 1 ? "" : "s"} auto-filled.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost !text-xs"
+              onClick={pickFile}
+            >
+              Replace file
+            </button>
+          </div>
+
+          {(meta?.warnings?.length || 0) > 0 && (
+            <div className="mt-3 rounded border-l-2 border-l-[var(--warning)] bg-[rgba(255,179,0,0.08)] p-3 text-sm">
+              <p className="small-caps mb-1">Please verify</p>
+              <ul className="list-disc list-inside space-y-0.5 text-foreground/90">
+                {meta!.warnings!.map((w, k) => (
+                  <li key={k}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="btn btn-ghost !text-xs mt-3"
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {expanded ? "Hide details ▴" : "Edit details ▾"}
+          </button>
+        </div>
+      )}
+
+      {/* Manual editor — always available, expanded after upload only on demand. */}
+      {(!uploaded || expanded) && (
+        <div className={uploaded ? "border-t border-border pt-4 mt-4" : ""}>
+          <div className="grid md:grid-cols-4 gap-4 mb-4">
+            <div>
+              <label className="label">File ID</label>
+              <input
+                className="input"
+                value={doc.file_id}
+                onChange={(e) => onChange({ file_id: e.target.value })}
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="label">File name</label>
+              <input
+                className="input"
+                value={doc.file_name || ""}
+                onChange={(e) => onChange({ file_name: e.target.value })}
+                placeholder="prescription.jpg"
+              />
+            </div>
+            <div>
+              <label className="label">Quality</label>
+              <select
+                className="select"
+                value={doc.quality}
+                onChange={(e) =>
+                  onChange({ quality: e.target.value as DocumentQuality })
+                }
+              >
+                {qualities.map((q) => (
+                  <option key={q} value={q}>
+                    {q}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="grid md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="label">Document type</label>
+              <select
+                className="select"
+                value={doc.actual_type}
+                onChange={(e) =>
+                  onChange({ actual_type: e.target.value as DocumentType })
+                }
+              >
+                {docTypes.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Patient name on document</label>
+              <input
+                className="input"
+                value={doc.patient_name_on_doc || ""}
+                onChange={(e) =>
+                  onChange({ patient_name_on_doc: e.target.value })
+                }
+                placeholder="optional, used for cross-validation"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="label">Structured content (JSON)</label>
+            <textarea
+              className="textarea font-mono text-sm"
+              value={JSON.stringify(doc.content || {}, null, 2)}
+              onChange={(e) => onChangeContent(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground mt-2 italic">
+              {uploaded
+                ? "Edit anything Sarvam got wrong. The pipeline will use what you submit."
+                : "Either edit the JSON directly, or upload a file above to have it filled in."}
+            </p>
+          </div>
+        </div>
       )}
     </div>
   );

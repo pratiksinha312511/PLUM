@@ -1,0 +1,27 @@
+feat: upload-first auto-extraction UX with vision guardrails
+
+Replace the manual JSON-entry workflow with a drag-and-drop card that
+classifies the document, extracts fields, and surfaces confidence so
+users only edit when the model is uncertain.
+
+Backend
+- extraction.py: new strict envelope {doc_type, doc_type_confidence,
+  quality, patient_name, fields, warnings}; _coerce_envelope validates
+  doc_type against DocumentType enum, clamps confidence, normalises
+  quality, and forces UNREADABLE when the model returns UNKNOWN with no
+  fields. _failed_envelope returns a canonical shape on LLM/network
+  errors so the frontend can always render.
+- main.py: /api/upload no longer requires actual_type; honours user
+  override when supplied; returns confidence, warnings, extraction_status
+  and a needs_review flag (true when status != OK, quality != GOOD,
+  confidence < 0.7, or type == UNKNOWN).
+
+Frontend
+- api.ts: UploadResult type with the new fields; api.upload() now takes
+  an optional actualType.
+- ClaimForm.tsx: replace DocumentUploader with DocumentCard, a 4-state
+  component (idle / uploading / extracted / error). Idle shows a big
+  drop-zone; extracted shows a compact preview (type pill, colour-coded
+  quality, confidence, patient, field count) plus a warnings banner; the
+  manual editor stays available behind an "Edit details" expander and
+  auto-opens whenever needs_review is true.

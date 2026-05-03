@@ -4,16 +4,29 @@ For the assignment, document `content` is provided as structured JSON in the
 test cases. In a real system this is where Sarvam (or a vision model) would
 parse uploaded images/PDFs into the same shape.
 
-We expose an `extract_via_llm` path that the API uses when raw text is
-provided through the upload endpoint. If the LLM fails we degrade gracefully
-and leave the structured `content` as-is.
+We expose an `extract_image_via_llm` path that the upload endpoint uses to
+turn a raw image / PDF into a fully-classified document envelope:
+  - which document type the file is (PRESCRIPTION, HOSPITAL_BILL, ...)
+  - quality assessment (GOOD / POOR / UNREADABLE)
+  - patient name
+  - the structured fields the pipeline cares about
+  - per-field + overall confidence
+  - any warnings the model wants to surface
+
+If the LLM fails or returns garbage we degrade gracefully and the caller
+marks the doc as UNREADABLE so the pipeline halts cleanly.
 """
 from __future__ import annotations
+
+from typing import Any
 
 from app.agents.base import Agent, PipelineContext
 from app.models.schemas import DocumentType
 from app.services.sarvam import SarvamClient, SarvamError
 
+
+_VALID_DOC_TYPES = {t.value for t in DocumentType}
+_VALID_QUALITY = {"GOOD", "POOR", "UNREADABLE"}
 
 EXTRACTION_SYSTEM_PROMPT = (
     "You are a precise medical document parser for an Indian health insurer. "
@@ -66,28 +79,148 @@ async def extract_text_via_llm(text: str) -> dict:
         return {}
 
 
+VISION_SYSTEM_PROMPT = (
+    "You are an expert medical-document analyst for an Indian health insurer. "
+    "You will be shown ONE image of a single medical document (prescription, "
+    "hospital bill, lab report, pharmacy invoice, discharge summary, dental "
+    "chart, or medical certificate). "
+    "You MUST return ONE strict JSON object with this exact shape:\n"
+    "{\n"
+    '  "doc_type": one of ["PRESCRIPTION","HOSPITAL_BILL","PHARMACY_BILL",'
+    '"LAB_REPORT","DISCHARGE_SUMMARY","DENTAL_CHART","MEDICAL_CERTIFICATE",'
+    '"INSURANCE_CARD","UNKNOWN"],\n'
+    '  "doc_type_confidence": float in [0,1],\n'
+    '  "quality": one of ["GOOD","POOR","UNREADABLE"],\n'
+    '  "patient_name": string or null,\n'
+    '  "fields": {\n'
+    '     "doctor_name": string or null,\n'
+    '     "doctor_registration": string or null,\n'
+    '     "date": "YYYY-MM-DD" or null,\n'
+    '     "diagnosis": string or null,\n'
+    '     "medicines": [string] or [],\n'
+    '     "tests_ordered": [string] or [],\n'
+    '     "hospital_name": string or null,\n'
+    '     "line_items": [{"description": string, "amount": number}] or [],\n'
+    '     "total": number or null\n'
+    "  },\n"
+    '  "warnings": [string]   // anything you noticed the user should verify\n'
+    "}\n\n"
+    "Rules:\n"
+    "1. Use null / [] for fields you cannot read with confidence. "
+    "DO NOT invent values. Hallucinations cost us money and customer trust.\n"
+    "2. If the image is blank, blurry, rotated badly, or not a medical "
+    "document, set quality=UNREADABLE and doc_type=UNKNOWN.\n"
+    "3. doc_type_confidence reflects how sure you are about the document "
+    "category. Below 0.7 means the user should confirm.\n"
+    "4. Numbers are unitless rupees. Strip currency symbols and commas.\n"
+    "5. Output ONLY the JSON object — no commentary, no markdown fences."
+)
+
 VISION_USER_PROMPT = (
-    "Read this medical document image and return a strict JSON object with "
-    "the fields you can identify. Use null for missing fields. Never invent. "
-    "Fields: doctor_name, doctor_registration, patient_name, "
-    "date (YYYY-MM-DD), diagnosis, medicines (array of strings), "
-    "tests_ordered (array), hospital_name, line_items (array of "
-    "{description, amount}), total."
+    "Analyse this document image and return the JSON envelope as specified."
 )
 
 
 async def extract_image_via_llm(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
     """Sarvam vision call for an uploaded document image.
 
-    Returns a dict in the same shape as the test fixtures' ``content``.
-    On any failure returns an empty dict — the caller is expected to mark
-    the document as POOR/UNREADABLE quality so the pipeline stops or
-    degrades cleanly.
+    Returns a validated envelope:
+        {
+          "doc_type": str,            # always set; UNKNOWN on failure
+          "doc_type_confidence": float,
+          "quality": str,             # GOOD / POOR / UNREADABLE
+          "patient_name": str | None,
+          "fields": dict,             # the same shape pipelines consume
+          "warnings": [str],
+          "extraction_status": "OK" | "LLM_ERROR" | "INVALID_RESPONSE",
+        }
+    The caller can drop ``fields`` straight into ``DocumentInput.content``.
+    On any failure we mark quality=UNREADABLE so DocumentVerificationAgent
+    halts the claim with the right user-facing message.
     """
     client = SarvamClient()
     try:
-        return await client.vision_json(
-            EXTRACTION_SYSTEM_PROMPT, VISION_USER_PROMPT, image_bytes, mime_type
+        raw = await client.vision_json(
+            VISION_SYSTEM_PROMPT, VISION_USER_PROMPT, image_bytes, mime_type
         )
-    except SarvamError:
-        return {}
+    except SarvamError as exc:
+        return _failed_envelope("LLM_ERROR", str(exc))
+
+    return _coerce_envelope(raw)
+
+
+def _failed_envelope(status: str, reason: str) -> dict[str, Any]:
+    return {
+        "doc_type": "UNKNOWN",
+        "doc_type_confidence": 0.0,
+        "quality": "UNREADABLE",
+        "patient_name": None,
+        "fields": {},
+        "warnings": [reason],
+        "extraction_status": status,
+    }
+
+
+def _coerce_envelope(raw: Any) -> dict[str, Any]:
+    """Validate and normalise the LLM response.
+
+    The model is *supposed* to return our envelope shape, but we cannot trust
+    it. We accept legacy responses (a flat field dict) too so older prompts
+    don't break.
+    """
+    if not isinstance(raw, dict) or not raw:
+        return _failed_envelope("INVALID_RESPONSE", "Model returned no JSON object.")
+
+    # Legacy / fallback: model returned just the fields dict.
+    if "fields" not in raw and "doc_type" not in raw:
+        return {
+            "doc_type": "UNKNOWN",
+            "doc_type_confidence": 0.0,
+            "quality": "GOOD" if raw else "UNREADABLE",
+            "patient_name": raw.get("patient_name"),
+            "fields": raw,
+            "warnings": [
+                "Document type was not detected; please confirm before submitting."
+            ],
+            "extraction_status": "OK",
+        }
+
+    doc_type = str(raw.get("doc_type", "UNKNOWN")).upper()
+    if doc_type not in _VALID_DOC_TYPES:
+        doc_type = "UNKNOWN"
+
+    quality = str(raw.get("quality", "GOOD")).upper()
+    if quality not in _VALID_QUALITY:
+        quality = "GOOD"
+
+    try:
+        confidence = float(raw.get("doc_type_confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+
+    fields = raw.get("fields")
+    if not isinstance(fields, dict):
+        fields = {}
+
+    warnings_raw = raw.get("warnings") or []
+    warnings = [str(w) for w in warnings_raw if w] if isinstance(warnings_raw, list) else []
+
+    # If the model says it can't read the image, force quality to UNREADABLE
+    # so the document-verification agent reacts correctly.
+    if doc_type == "UNKNOWN" and not fields:
+        quality = "UNREADABLE"
+
+    patient_name = raw.get("patient_name")
+    if patient_name is not None:
+        patient_name = str(patient_name).strip() or None
+
+    return {
+        "doc_type": doc_type,
+        "doc_type_confidence": confidence,
+        "quality": quality,
+        "patient_name": patient_name,
+        "fields": fields,
+        "warnings": warnings,
+        "extraction_status": "OK",
+    }

@@ -123,22 +123,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export interface UploadResult extends DocumentInput {
+  actual_type_confidence: number;
+  actual_type_overridden: boolean;
+  warnings: string[];
+  extraction_status: "OK" | "LLM_ERROR" | "INVALID_RESPONSE";
+  needs_review: boolean;
+}
+
 export const api = {
   policy: () => request<Record<string, unknown>>("/policy"),
   submit: (sub: ClaimSubmission) =>
     request<ClaimDecision>("/claims", { method: "POST", body: JSON.stringify(sub) }),
   list: () => request<ClaimDecision[]>("/claims"),
   get: (id: string) => request<ClaimDecision>(`/claims/${id}`),
-  upload: async (file: File, actualType: DocumentType): Promise<DocumentInput> => {
+  upload: async (file: File, actualType?: DocumentType): Promise<UploadResult> => {
     const fd = new FormData();
     fd.append("file", file);
-    fd.append("actual_type", actualType);
+    if (actualType) fd.append("actual_type", actualType);
     const res = await fetch(`${API_BASE}/upload`, { method: "POST", body: fd });
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`${res.status} ${res.statusText}: ${text}`);
     }
-    return res.json() as Promise<DocumentInput>;
+    return res.json() as Promise<UploadResult>;
   },
 };
 
